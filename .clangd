@@ -1,0 +1,23 @@
+CompileFlags:
+  Add: [
+    -Wall,
+    -Werror,
+    
+    -std=c99,
+    
+    -I/home/ivan/dev/c++/.cmake_installs/include,
+]
+
+Index:
+  Background: Build
+
+Completion:
+  AllScopes: true
+
+Diagnostics:
+  ClangTidy:
+    Add: performance-*
+    Remove: cppcoreguidelines-*
+
+InlayHints:
+  Designators: false
