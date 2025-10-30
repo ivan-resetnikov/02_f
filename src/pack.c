@@ -1,6 +1,9 @@
+#include "SDL3/SDL_iostream.h"
+#include "SDL3/SDL_stdinc.h"
 #include <assert.h>
 
 #include <SDL3/SDL.h>
+#include <stdio.h>
 
 /*
 ** Macros
@@ -9,6 +12,8 @@
 #define MAX_PATH_LENGTH 512
 
 #define __FILENAME__ (strrchr(__FILE__, '/') ? strrchr(__FILE__, '/') + 1 : __FILE__)
+
+#define BYTES_TO_PB(b) (double)b / (1024.0 * 1024.0 * 1024.0 * 1024.0 * 1024.0)
 
 #define LOG_DEBUG(format_string, ...) \
     SDL_Log("debug:    %s:%d %s - " format_string "\n", __FILENAME__, __LINE__, __func__, ##__VA_ARGS__)
@@ -35,12 +40,15 @@ typedef struct {
 ** Declarations
 */
 
-size_t get_file_size(char* path);
-
 void scan_dir(char* path);
 
 SDL_EnumerationResult list_dir(void *userdata, const char *dirname, const char *fname);
 
+char* bytes_to_human_readable(size_t bytes);
+
+size_t get_file_size(char* path);
+
+char* str_new_formatted(const char* fmt, ...);
 bool str_starts_with(char* str, char* prefix);
 char* str_override(char* dest, char* str);
 
@@ -138,7 +146,7 @@ int main(int args_count, char* args[])
     for (int i = 0; i < file_entires_count; i++) {
         FileEntry* file_entry = &file_entires[i];
         
-        LOG_INFO("Dumping: %s", file_entry->path);
+        LOG_INFO("Dumping %s: %s", bytes_to_human_readable(file_entry->size), file_entry->path);
 
         SDL_IOStream* file_io = SDL_IOFromFile(file_entry->path, "r");
         if (!file_io) {
@@ -165,29 +173,13 @@ int main(int args_count, char* args[])
         SDL_CloseIO(file_io);
     }
 
+    size_t out_file_size = SDL_TellIO(out_file);
+
     SDL_CloseIO(out_file);
 
-    LOG_INFO("%s created successfully!", out_path);
+    LOG_INFO("%s created successfully! Final size: %s", out_path, bytes_to_human_readable(out_file_size));
 
     return 0;
-}
-
-
-size_t get_file_size(char* path)
-{
-    SDL_IOStream* f = SDL_IOFromFile(path, "r");
-    if (!f) {
-        LOG_ERROR("Failed to open file: %s! SDL error:\n%s", path, SDL_GetError());
-        return 0;
-    }
-
-    SDL_SeekIO(f, 0, SDL_IO_SEEK_END);
-
-    size_t file_size = SDL_TellIO(f);
-
-    SDL_CloseIO(f);
-
-    return file_size;
 }
 
 
@@ -228,6 +220,41 @@ SDL_EnumerationResult list_dir(void *userdata, const char *dirname, const char *
 }
 
 
+size_t get_file_size(char* path)
+{
+    SDL_IOStream* f = SDL_IOFromFile(path, "r");
+    if (!f) {
+        LOG_ERROR("Failed to open file: %s! SDL error:\n%s", path, SDL_GetError());
+        return 0;
+    }
+
+    SDL_SeekIO(f, 0, SDL_IO_SEEK_END);
+
+    size_t file_size = SDL_TellIO(f);
+
+    SDL_CloseIO(f);
+
+    return file_size;
+}
+
+
+char* bytes_to_human_readable(size_t bytes)
+{
+    const char* units[] = {"B", "KB", "MB", "GB", "TB", "PB"};
+    
+    const int units_count = sizeof(units) / sizeof(char*);
+    double count = (double)bytes;
+    int i = 0;
+
+    while (count >= 1024.0 && i < units_count) {
+        count /= 1024.0;
+        i++;
+    }
+
+    return str_new_formatted("%.2f %s", count, units[i]);
+}
+
+
 bool str_starts_with(char* str, char* prefix) {
     size_t len_prefix = strlen(prefix);
 
@@ -242,4 +269,24 @@ char* str_override(char* dest, char* str)
     SDL_free(dest);
     char* new_dest = SDL_strdup(str);
     return new_dest;
+}
+
+char* str_new_formatted(const char* fmt, ...) {
+    va_list args;
+
+    va_start(args, fmt);
+    int str_len = SDL_vsnprintf(NULL, 0, fmt, args) + 1;
+    va_end(args);
+
+    char* str = (char*)SDL_calloc(1, str_len);
+    if (!str) {
+        LOG_ERROR("Failed to allocate enough memory for the new string.");
+        return NULL;
+    }
+
+    va_start(args, fmt);
+    SDL_vsnprintf(str, str_len, fmt, args);
+    va_end(args);
+
+    return str;
 }
