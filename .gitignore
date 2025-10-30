@@ -1,0 +1,9 @@
+# Build
+/bin/
+
+# Default dev utils
+/.clangd
+
+/run.sh
+/compile.sh
+/compile_pack.sh
