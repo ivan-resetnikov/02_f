@@ -66,9 +66,16 @@ typedef struct {
 } Camera;
 
 typedef struct {
-    uint64_t tick;
+    GLuint VAO;
+    GLuint VBO;
+    GLuint EBO;
+} Mesh;
 
+typedef struct {
+    uint64_t tick;
     Camera cam;
+
+    Mesh mesh;
 } Game;
 
 struct Context {
@@ -98,6 +105,7 @@ FileEntry* io_get_file_entry(const char* path);
 
 char* io_read_text_file(const char* path);
 GLuint io_load_texture(const char* path, GLint wrap_mode, GLint min_filter_mode, GLint mag_filter_mode, GLenum texture_format, bool flip_y, int* out_width, int* out_height);
+void io_load_mesh_mdl(const char* path, Mesh* dest);
 
 GLuint create_generic_shader(char* vertex_shader_source, char* fragment_shader_source);
 
@@ -168,6 +176,8 @@ SDL_AppResult SDL_AppIterate(void *appstate)
     {
         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+        // Draw mesh
     }
 
     // Flush
@@ -303,7 +313,7 @@ bool init_game()
 {
     LOG_DEBUG("Initializing game");
 
-    LOG_CRITICAL("%s", io_read_text_file("./assets/a/test2.txt"));
+    io_load_mesh_mdl("./assets/models/levels/tot.mdl", &ctx.g.mesh);
 
     LOG_INFO("Initialised game successfully");
     return true;
@@ -443,6 +453,18 @@ GLuint io_load_texture(const char* path, GLint wrap_mode, GLint min_filter_mode,
     if (out_height != NULL) *out_height = height;
 
     return texture;    
+}
+
+
+void io_load_mesh_mdl(const char* path, Mesh* dest)
+{
+    FileEntry* file_entry = io_get_file_entry(path);
+    if (file_entry == NULL) {
+        LOG_ERROR("Can not find mdl file!");
+        return;
+    }
+
+    // TODO
 }
 
 
