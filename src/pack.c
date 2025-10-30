@@ -145,8 +145,6 @@ int main(int args_count, char* args[])
             + sizeof(size_t)
         );
     }
-
-    LOG_CRITICAL("index_section_size: %lu", index_section_size);
     
     // Converting dump (sum of sizes of files from earlier) offset to global (output file) offset
     for (int i = 0; i < file_entires_count; i++) {

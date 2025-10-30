@@ -39,10 +39,9 @@
 */
 
 typedef struct {
-    int path_size;
     char* path;
-    size_t file_offset;
-    size_t file_size;
+    size_t offset;
+    size_t size;
 } FileEntry;
 
 typedef struct {
@@ -98,7 +97,7 @@ void quit_game();
 FileEntry* io_get_file_entry(const char* path);
 
 char* io_read_text_file(const char* path);
-GLuint io_load_texture(const char* path, GLint wrap_mode, GLint min_filter_mode, GLint mag_filter_mode, GLenum texture_format, int flip_y);
+GLuint io_load_texture(const char* path, GLint wrap_mode, GLint min_filter_mode, GLint mag_filter_mode, GLenum texture_format, bool flip_y, int* out_width, int* out_height);
 
 GLuint create_generic_shader(char* vertex_shader_source, char* fragment_shader_source);
 
@@ -275,17 +274,14 @@ bool init_engine()
             FileEntry* f = &ctx.assets_io_files[i];
 
             // Path
-            SDL_ReadIO(ctx.assets_io, &f->path_size, sizeof(int));
-            f->path = SDL_malloc(f->path_size);
-            SDL_ReadIO(ctx.assets_io, f->path, f->path_size);
+            int path_size = 0;
+            SDL_ReadIO(ctx.assets_io, &path_size, sizeof(int));
+            f->path = SDL_malloc(path_size);
+            SDL_ReadIO(ctx.assets_io, f->path, path_size);
 
             // Offset + size
-            SDL_ReadIO(ctx.assets_io, &f->file_offset, sizeof(size_t));
-            SDL_ReadIO(ctx.assets_io, &f->file_size, sizeof(size_t));
-
-            LOG_WARNING("f->path %s", f->path);
-            LOG_WARNING("f->file_offset %lu", f->file_offset);
-            LOG_WARNING("f->file_size %lu", f->file_size);
+            SDL_ReadIO(ctx.assets_io, &f->offset, sizeof(size_t));
+            SDL_ReadIO(ctx.assets_io, &f->size, sizeof(size_t));
         }
     }
 
@@ -361,25 +357,71 @@ char* io_read_text_file(const char* path)
         return NULL;
     }
 
-    char* text_buffer = (char*)SDL_calloc(1, file_entry->file_size + 1);
+    char* text_buffer = (char*)SDL_calloc(1, file_entry->size + 1);
     if (!text_buffer) {
         LOG_ERROR("Failed to allocate text file buffer!");
         return NULL;
     }
 
-    SDL_SeekIO(ctx.assets_io, file_entry->file_offset, SDL_IO_SEEK_SET);
-    SDL_ReadIO(ctx.assets_io, text_buffer, file_entry->file_size);
+    SDL_SeekIO(ctx.assets_io, file_entry->offset, SDL_IO_SEEK_SET);
+    SDL_ReadIO(ctx.assets_io, text_buffer, file_entry->size);
 
-    text_buffer[file_entry->file_size] = '\0'; // Text files come without a null-terminator
+    text_buffer[file_entry->size] = '\0'; // Text files come without a null-terminator
 
     return text_buffer;
 }
 
 
-GLuint io_load_texture(const char* path, GLint wrap_mode, GLint min_filter_mode, GLint mag_filter_mode, GLenum texture_format, int flip_y)
+GLuint io_load_texture(const char* path, GLint wrap_mode, GLint min_filter_mode, GLint mag_filter_mode, GLenum texture_format, bool flip_y, int* out_width, int* out_height)
 {
+    FileEntry* file_entry = io_get_file_entry(path);
+    if (file_entry == NULL) {
+        LOG_ERROR("Could not find texture file!");
+        return 0;
+    }
+
+    // Load image file's binary
+    unsigned char* file_buffer = (unsigned char*)malloc(file_entry->size);
+    SDL_SeekIO(ctx.assets_io, file_entry->offset, SDL_IO_SEEK_SET);
+    SDL_ReadIO(ctx.assets_io, file_buffer, file_entry->size);
+
+    // Load with stb_image
     stbi_set_flip_vertically_on_load(flip_y);
+
+    int width, height, color_channel_count;
+
+    unsigned char* data = stbi_load_from_memory(file_buffer, (int)file_entry->size, &width, &height, &color_channel_count, 0);
+
+    // Check if data loaded
+    if (!data) {
+        LOG_ERROR("Could not load texture from file buffer! stbi_load_from_memory failed.");
+
+        stbi_image_free(data);
+        free(file_buffer);
+
+        return 0;
+    }
+
+    // Detect texture format from color_channel_count if none given.
+    if (texture_format == 0) {
+        switch (color_channel_count)
+        {
+        case 1: texture_format = GL_RED; break;
+        case 2: texture_format = GL_RG; break;
+        case 3: texture_format = GL_RGB; break;
+        case 4: texture_format = GL_RGBA; break;
+        default: {
+            LOG_ERROR("Failed to detect texture format! Unusual channel count of: %d", color_channel_count);    
+
+            stbi_image_free(data);
+            free(file_buffer);
+            
+            return 0;
+        } break;
+        }
+    }
     
+    // Upload to GPU
     GLuint texture;
     glGenTextures(1, &texture);
     glBindTexture(GL_TEXTURE_2D, texture);
@@ -389,22 +431,18 @@ GLuint io_load_texture(const char* path, GLint wrap_mode, GLint min_filter_mode,
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, min_filter_mode);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, mag_filter_mode);
 
-    int width, height, color_channel_count;
-
-    unsigned char* data = stbi_load(path, &width, &height, &color_channel_count, 0);
-
-    if (data) {
-        glTexImage2D(GL_TEXTURE_2D, 0, texture_format, width, height, 0, texture_format, GL_UNSIGNED_BYTE, data);
-        if (min_filter_mode == GL_LINEAR_MIPMAP_LINEAR || min_filter_mode == GL_LINEAR_MIPMAP_NEAREST) {
-            glGenerateMipmap(GL_TEXTURE_2D);
-        }
-    } else {
-        LOG_ERROR("Could not load texture: %s!", path);
+    glTexImage2D(GL_TEXTURE_2D, 0, texture_format, width, height, 0, texture_format, GL_UNSIGNED_BYTE, data);
+    
+    // Generate mipmaps if used
+    if (min_filter_mode == GL_LINEAR_MIPMAP_LINEAR || min_filter_mode == GL_LINEAR_MIPMAP_NEAREST) {
+        glGenerateMipmap(GL_TEXTURE_2D);
     }
 
-    stbi_image_free(data);
+    // Set output variables if requested
+    if (out_width != NULL) *out_width = width;
+    if (out_height != NULL) *out_height = height;
 
-    return texture;
+    return texture;    
 }
 
 
