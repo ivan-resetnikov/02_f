@@ -26,10 +26,12 @@ link_flags="${link_flags} -lm"
 # Compile
 compile_command="${clang_bin} ${include_flags} ${src_files} ${link_flags} -o ./bin/main"
 
+echo "${clang_bin}:"
 echo "${compile_command}"
 
 mkdir -p "./bin"
 ${compile_command}
 
 # Pack assets
+echo "pack:"
 ./bin/pack -i:./assets -o:./bin/assets.bin

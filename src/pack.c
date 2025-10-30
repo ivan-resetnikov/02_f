@@ -31,9 +31,10 @@
 */
 
 typedef struct {
+    int path_size;
     char path[MAX_PATH_LENGTH];
-    size_t size;
-    size_t offset;
+    size_t file_offset;
+    size_t file_size;
 } FileEntry;
 
 /*
@@ -94,6 +95,8 @@ int main(int args_count, char* args[])
     LOG_DEBUG("Writing header");
     SDL_WriteIO(out_file, &in_files_count, sizeof(int));
 
+    size_t header_size = SDL_TellIO(out_file);
+
     LOG_DEBUG("Creating file index");
     FileEntry* file_entires = NULL;
     int file_entires_count = 0;
@@ -101,52 +104,77 @@ int main(int args_count, char* args[])
     // We will first write the header & the file entires index then pack
     // then raw data of each file, one after another.
     // We use increment this variable evry time a file's data is written to track when the next one begins.
-    size_t header_size = SDL_TellIO(out_file);
-    size_t file_entires_size_max = sizeof(file_entires) * in_files_count;
+    size_t file_entires_size = sizeof(FileEntry) * in_files_count;
+    file_entires = SDL_malloc(file_entires_size);
 
-    size_t file_entry_begin_offset = header_size + file_entires_size_max;
-
+    size_t index_section_size = 0;
+    size_t file_offset = 0;
     for (int i = 0; i < in_files_count; i++) {
         char* file_path = in_files[i];
         LOG_DEBUG("Creating entry #%d: %s", i, file_path);
 
-        // Realloc
-        size_t new_size = sizeof(FileEntry) * (file_entires_count + 1);
-        file_entires = SDL_realloc(file_entires, new_size);
         FileEntry* f = &file_entires[file_entires_count++];
 
-        // Write file entry
-        {
-            // Path
-            SDL_memset(f->path, 0, MAX_PATH_LENGTH);
-            SDL_memcpy(f->path, file_path, strlen(file_path) + 1);
-    
-            // File size
-            size_t file_size = get_file_size(f->path);
-            if (file_size == 0) {
-                LOG_ERROR("Failed to measure file size: %s, skipping!", f->path);
-                continue;
-            }
+        // Path
+        f->path_size = strlen(file_path) + 1;
+        SDL_memset(f->path, 0, MAX_PATH_LENGTH);
+        SDL_memcpy(f->path, file_path, f->path_size + 1);
 
-            f->size = file_size;
-
-            // Offset
-            f->offset = file_entry_begin_offset;
-
-            file_entry_begin_offset += file_size;
+        // File size
+        size_t file_size = get_file_size(f->path);
+        if (file_size == 0) {
+            LOG_ERROR("Failed to measure file size: %s, skipping!", f->path);
+            continue;
         }
+
+        f->file_size = file_size;
+
+        // Offset
+        // IMPORTANT: This is the offset that is the sum of the size of every file from earlier.
+        // This it not a global file offset YET! We need to ADD to this variable:
+        // - the size of the header
+        // - and the size of the index section (WHICH IS DYNAMIC!)
+        f->file_offset = file_offset;
+        file_offset += f->file_size;
+
+        // Index section
+        index_section_size += (
+            sizeof(int)
+            + f->path_size
+            + sizeof(size_t)
+            + sizeof(size_t)
+        );
+    }
+
+    LOG_CRITICAL("index_section_size: %lu", index_section_size);
+    
+    // Converting dump (sum of sizes of files from earlier) offset to global (output file) offset
+    for (int i = 0; i < file_entires_count; i++) {
+        FileEntry* f = &file_entires[i];
+
+        f->file_offset += header_size + index_section_size;
     }
 
     // Write file index
     LOG_DEBUG("Writing file index");
-    SDL_WriteIO(out_file, file_entires, file_entires_size_max);
+    for (int i = 0; i < file_entires_count; i++) {
+        FileEntry* f = &file_entires[i];
+        
+        // Path
+        SDL_WriteIO(out_file, &f->path_size, sizeof(int));
+        SDL_WriteIO(out_file, f->path, f->path_size);
+
+        // Offset + size
+        SDL_WriteIO(out_file, &f->file_offset, sizeof(size_t));
+        SDL_WriteIO(out_file, &f->file_size, sizeof(size_t));
+    }
 
     // Write file contents
     LOG_DEBUG("Writing file contents");
     for (int i = 0; i < file_entires_count; i++) {
         FileEntry* file_entry = &file_entires[i];
         
-        LOG_INFO("Dumping %s: %s", bytes_to_human_readable(file_entry->size), file_entry->path);
+        LOG_INFO("Dumping %s: %s", bytes_to_human_readable(file_entry->file_size), file_entry->path);
 
         SDL_IOStream* file_io = SDL_IOFromFile(file_entry->path, "r");
         if (!file_io) {
@@ -154,22 +182,30 @@ int main(int args_count, char* args[])
             continue;
         }
 
-        void* file_buffer = SDL_malloc(file_entry->size);
+        void* file_buffer = SDL_malloc(file_entry->file_size);
         if (!file_buffer) {
             LOG_ERROR("Failed to allocate file buffer: %s, skipping! SDL error:\n%s", file_entry->path, SDL_GetError());
             SDL_CloseIO(file_io);
             continue;
         }
 
-        size_t written_bytes = SDL_WriteIO(out_file, file_buffer, file_entry->size);
-        if (written_bytes < file_entry->size) {
-            LOG_ERROR("Failed to fully write the input file into the output file! Written: %zu/%zu bytes", written_bytes, file_entry->size);
+        size_t read_bytes = SDL_ReadIO(file_io, file_buffer, file_entry->file_size);
+        if (read_bytes < file_entry->file_size) {
+            LOG_ERROR("Failed to read the input file fully! Written: %zu/%zu bytes. SDL error:\n%s", read_bytes, file_entry->file_size, SDL_GetError());
+            SDL_free(file_buffer);
+            SDL_CloseIO(file_io);
+            continue;
+        }
+
+        size_t written_bytes = SDL_WriteIO(out_file, file_buffer, file_entry->file_size);
+        if (written_bytes < file_entry->file_size) {
+            LOG_ERROR("Failed to fully write the input file into the output file! Written: %zu/%zu bytes. SDL error:\n%s", written_bytes, file_entry->file_size, SDL_GetError());
+            SDL_free(file_buffer);
             SDL_CloseIO(file_io);
             continue;
         }
 
         SDL_free(file_buffer);
-
         SDL_CloseIO(file_io);
     }
 

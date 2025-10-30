@@ -1,3 +1,5 @@
+#include "SDL3/SDL_iostream.h"
+#include <stddef.h>
 #define SDL_MAIN_USE_CALLBACKS 1
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
@@ -37,9 +39,10 @@
 */
 
 typedef struct {
-    char path[MAX_PATH_LENGTH];
-    size_t size;
-    size_t offset;
+    int path_size;
+    char* path;
+    size_t file_offset;
+    size_t file_size;
 } FileEntry;
 
 typedef struct {
@@ -267,7 +270,23 @@ bool init_engine()
 
         // Load file index
         ctx.assets_io_files = SDL_realloc(ctx.assets_io_files, sizeof(FileEntry) * ctx.assets_io_files_count);
-        SDL_ReadIO(ctx.assets_io, ctx.assets_io_files, sizeof(FileEntry) * ctx.assets_io_files_count);
+
+        for (int i = 0; i < ctx.assets_io_files_count; i++) {
+            FileEntry* f = &ctx.assets_io_files[i];
+
+            // Path
+            SDL_ReadIO(ctx.assets_io, &f->path_size, sizeof(int));
+            f->path = SDL_malloc(f->path_size);
+            SDL_ReadIO(ctx.assets_io, f->path, f->path_size);
+
+            // Offset + size
+            SDL_ReadIO(ctx.assets_io, &f->file_offset, sizeof(size_t));
+            SDL_ReadIO(ctx.assets_io, &f->file_size, sizeof(size_t));
+
+            LOG_WARNING("f->path %s", f->path);
+            LOG_WARNING("f->file_offset %lu", f->file_offset);
+            LOG_WARNING("f->file_size %lu", f->file_size);
+        }
     }
 
     /* Misc */
@@ -288,7 +307,7 @@ bool init_game()
 {
     LOG_DEBUG("Initializing game");
 
-    LOG_CRITICAL("%s", io_read_text_file("./assets/test.txt"));
+    LOG_CRITICAL("%s", io_read_text_file("./assets/a/test2.txt"));
 
     LOG_INFO("Initialised game successfully");
     return true;
@@ -298,6 +317,8 @@ bool init_game()
 void quit_engine()
 {
     LOG_DEBUG("Exiting engine");
+
+    SDL_SetWindowRelativeMouseMode(ctx.display.window, 0);
 
     SDL_CloseIO(ctx.assets_io);
     SDL_DestroyWindow(ctx.display.window);
@@ -340,20 +361,16 @@ char* io_read_text_file(const char* path)
         return NULL;
     }
 
-    LOG_CRITICAL("%s", file_entry->path);
-    LOG_CRITICAL("%zu", file_entry->size);
-    LOG_CRITICAL("%zu", file_entry->offset);
-
-    char* text_buffer = (char*)SDL_calloc(1, file_entry->size);
+    char* text_buffer = (char*)SDL_calloc(1, file_entry->file_size + 1);
     if (!text_buffer) {
         LOG_ERROR("Failed to allocate text file buffer!");
         return NULL;
     }
 
-    SDL_SeekIO(ctx.assets_io, file_entry->offset, SDL_IO_SEEK_SET);
-    SDL_ReadIO(ctx.assets_io, text_buffer, file_entry->size);
+    SDL_SeekIO(ctx.assets_io, file_entry->file_offset, SDL_IO_SEEK_SET);
+    SDL_ReadIO(ctx.assets_io, text_buffer, file_entry->file_size);
 
-    text_buffer[file_entry->size] = '\0'; // Text files come without a null-terminator
+    text_buffer[file_entry->file_size] = '\0'; // Text files come without a null-terminator
 
     return text_buffer;
 }
