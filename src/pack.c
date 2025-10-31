@@ -1,9 +1,6 @@
-#include "SDL3/SDL_iostream.h"
-#include "SDL3/SDL_stdinc.h"
 #include <assert.h>
 
 #include <SDL3/SDL.h>
-#include <stdio.h>
 
 /*
 ** Macros
@@ -49,6 +46,7 @@ char* bytes_to_human_readable(size_t bytes);
 
 size_t get_file_size(char* path);
 
+void str_path_ensure_forward_slash(char* path);
 char* str_new_formatted(const char* fmt, ...);
 bool str_starts_with(char* str, char* prefix);
 char* str_override(char* dest, char* str);
@@ -242,6 +240,7 @@ SDL_EnumerationResult list_dir(void *userdata, const char *dirname, const char *
             in_files = SDL_realloc(in_files, new_size);
             
             in_files[in_files_count] = SDL_strdup(full_path);
+            str_path_ensure_forward_slash(in_files[in_files_count]);
 
             in_files_count++;
         }
@@ -251,6 +250,23 @@ SDL_EnumerationResult list_dir(void *userdata, const char *dirname, const char *
     }
 
     return SDL_ENUM_CONTINUE;
+}
+
+
+char* bytes_to_human_readable(size_t bytes)
+{
+    const char* units[] = {"B", "KB", "MB", "GB", "TB", "PB"};
+    
+    const int units_count = sizeof(units) / sizeof(char*);
+    double count = (double)bytes;
+    int i = 0;
+
+    while (count >= 1024.0 && i < units_count) {
+        count /= 1024.0;
+        i++;
+    }
+
+    return str_new_formatted("%.2f %s", count, units[i]);
 }
 
 
@@ -272,24 +288,21 @@ size_t get_file_size(char* path)
 }
 
 
-char* bytes_to_human_readable(size_t bytes)
+void str_path_ensure_forward_slash(char* path)
 {
-    const char* units[] = {"B", "KB", "MB", "GB", "TB", "PB"};
-    
-    const int units_count = sizeof(units) / sizeof(char*);
-    double count = (double)bytes;
-    int i = 0;
+    assert(path != NULL);
 
-    while (count >= 1024.0 && i < units_count) {
-        count /= 1024.0;
-        i++;
+    char* ptr_cpy = path;
+    while (*ptr_cpy != '\0') {
+        if (*ptr_cpy == '\\') *ptr_cpy = '/';
+
+        ptr_cpy++;
     }
-
-    return str_new_formatted("%.2f %s", count, units[i]);
 }
 
 
-bool str_starts_with(char* str, char* prefix) {
+bool str_starts_with(char* str, char* prefix)
+{
     size_t len_prefix = strlen(prefix);
 
     assert(strlen(str) > len_prefix);

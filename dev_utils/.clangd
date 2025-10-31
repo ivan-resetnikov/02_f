@@ -6,6 +6,7 @@ CompileFlags:
     -std=c99,
     
     -I/home/ivan/dev/c++/.cmake_installs/include,
+    -IC:\dev\c++\.cmake_installs\include,
 ]
 
 Index:
