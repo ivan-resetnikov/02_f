@@ -7,3 +7,7 @@
 /run.sh
 /compile.sh
 /pack_compile.sh
+
+/run.bat
+/compile.bat
+/pack_compile.bat
