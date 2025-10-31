@@ -1,3 +1,5 @@
+#include "cglm/mat4.h"
+#include "cglm/vec3.h"
 #define SDL_MAIN_USE_CALLBACKS 1
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
@@ -66,7 +68,7 @@ typedef struct {
 typedef struct {
     GLuint VAO;
     GLuint VBO;
-    GLuint EBO;
+    int vertex_count;
 } Mesh;
 
 typedef struct {
@@ -74,6 +76,7 @@ typedef struct {
     Camera cam;
 
     Mesh mesh;
+    GLuint shader;
 } Game;
 
 struct Context {
@@ -109,6 +112,8 @@ GLuint create_generic_shader(char* vertex_shader_source, char* fragment_shader_s
 
 void view_mat_from_cam(Camera* cam, mat4 dest);
 
+char* bytes_to_human_readable(size_t bytes);
+char* str_new_formatted(const char* fmt, ...);
 
 /*
 ** Implementation
@@ -116,7 +121,7 @@ void view_mat_from_cam(Camera* cam, mat4 dest);
 
 SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[])
 {
-    SDL_SetAppMetadata(PROJECT_NAME, "0.0.0", "dev.ivan-reshetnikov." PROJECT_NAME);
+    SDL_SetAppMetadata(PROJECT_NAME, "0.0.0", "dev.ivan_reshetnikov." PROJECT_NAME);
 
     if (!init_engine()) {
         LOG_CRITICAL("Failed to initialise engine!");
@@ -172,10 +177,28 @@ SDL_AppResult SDL_AppIterate(void *appstate)
 
     /* Finall pass */
     {
+        glEnable(GL_DEPTH_TEST);
+
         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
         // Draw mesh
+        mat4 model_mat = GLM_MAT4_IDENTITY_INIT;
+
+        glUseProgram(ctx.g.shader);
+
+        glUniformMatrix4fv(glGetUniformLocation(ctx.g.shader, "u_model_mat"), 1, GL_FALSE, &model_mat[0][0]);
+        glUniformMatrix4fv(glGetUniformLocation(ctx.g.shader, "u_view_mat"), 1, GL_FALSE, &view_mat[0][0]);
+        glUniformMatrix4fv(glGetUniformLocation(ctx.g.shader, "u_proj_mat"), 1, GL_FALSE, &proj_mat[0][0]);
+
+        // Material uniforms
+        // glActiveTexture(GL_TEXTURE0);
+        // glBindTexture(GL_TEXTURE_2D, material->diffuse_map);
+        // glUniform1i(glGetUniformLocation(ctx.g.shader, "u_texture"), 0);
+
+        // Draw segment
+        glBindVertexArray(ctx.g.mesh.VAO);
+        glDrawArrays(GL_TRIANGLES, 0, ctx.g.mesh.vertex_count);
     }
 
     // Flush
@@ -311,6 +334,13 @@ bool init_game()
 {
     LOG_DEBUG("Initializing game");
 
+    glm_vec3_copy((vec3){0.0f, 0.0f, 0.0f}, ctx.g.cam.position);
+    glm_vec3_copy((vec3){0.0f, 1.0f, 0.0f}, ctx.g.cam.up);
+
+    ctx.g.shader = create_generic_shader(
+        io_read_text_file("./assets/shaders/level.vs"),
+        io_read_text_file("./assets/shaders/level.fs"));
+
     io_load_mesh_mdl("./assets/models/levels/tot.mdl", &ctx.g.mesh);
 
     LOG_INFO("Initialised game successfully");
@@ -343,7 +373,7 @@ FileEntry* io_get_file_entry(const char* path)
     {
         FileEntry* candidate_file_entry = &ctx.assets_io_files[file_index];
 
-        if (strcmp((const char*)candidate_file_entry->path, path) == 0) {
+        if (SDL_strcmp((const char*)candidate_file_entry->path, path) == 0) {
             file_entry = candidate_file_entry;
             break;
         }
@@ -389,7 +419,7 @@ GLuint io_load_texture(const char* path, GLint wrap_mode, GLint min_filter_mode,
     }
 
     // Load image file's binary
-    unsigned char* file_buffer = (unsigned char*)malloc(file_entry->size);
+    unsigned char* file_buffer = (unsigned char*)SDL_malloc(file_entry->size);
     SDL_SeekIO(ctx.assets_io, file_entry->offset, SDL_IO_SEEK_SET);
     SDL_ReadIO(ctx.assets_io, file_buffer, file_entry->size);
 
@@ -405,7 +435,7 @@ GLuint io_load_texture(const char* path, GLint wrap_mode, GLint min_filter_mode,
         LOG_ERROR("Could not load texture from file buffer! stbi_load_from_memory failed.");
 
         stbi_image_free(data);
-        free(file_buffer);
+        SDL_free(file_buffer);
 
         return 0;
     }
@@ -422,7 +452,7 @@ GLuint io_load_texture(const char* path, GLint wrap_mode, GLint min_filter_mode,
             LOG_ERROR("Failed to detect texture format! Unusual channel count of: %d", color_channel_count);    
 
             stbi_image_free(data);
-            free(file_buffer);
+            SDL_free(file_buffer);
             
             return 0;
         } break;
@@ -454,7 +484,7 @@ GLuint io_load_texture(const char* path, GLint wrap_mode, GLint min_filter_mode,
 }
 
 
-void io_load_mesh_mdl(const char* path, Mesh* dest)
+void io_load_mesh_mdl(const char* path, Mesh* mesh)
 {
     FileEntry* file_entry = io_get_file_entry(path);
     if (file_entry == NULL) {
@@ -462,7 +492,55 @@ void io_load_mesh_mdl(const char* path, Mesh* dest)
         return;
     }
 
-    // TODO
+    // Load buffer
+    size_t bytes_read;
+
+    SDL_SeekIO(ctx.assets_io, file_entry->offset, SDL_IO_SEEK_SET);
+
+    int tri_count = 0;
+    bytes_read = SDL_ReadIO(ctx.assets_io, &tri_count, sizeof(int));
+    if (bytes_read < sizeof(int)) {
+        LOG_ERROR("Failed to read mesh size! SDL error:\n%s", SDL_GetError());
+    }
+
+    int floats_per_vertex = (
+        3 // Position attribute
+    );
+    size_t vertex_buffer_size = sizeof(GLfloat) * floats_per_vertex * tri_count * 3;
+
+    GLfloat* vertex_buffer = SDL_malloc(vertex_buffer_size);
+    if (!vertex_buffer) {
+        LOG_ERROR("Failed to allocate memory for the vertex buffer! SDL error:\n%s", SDL_GetError());
+        return;
+    }
+
+    bytes_read = SDL_ReadIO(ctx.assets_io, vertex_buffer, vertex_buffer_size);
+    if (bytes_read < vertex_buffer_size) {
+        LOG_ERROR("Unexpected EOF or read error while loading the vertex buffer! SDL error:\n%s", SDL_GetError());
+        SDL_free(vertex_buffer);
+        return;
+    }
+
+    LOG_DEBUG("Loaded %d polygons %s", tri_count, bytes_to_human_readable(vertex_buffer_size));
+
+    // Create mesh
+    mesh->vertex_count = tri_count * 3;
+
+    glGenVertexArrays(1, &mesh->VAO);
+    glGenBuffers(1, &mesh->VBO);
+    
+    glBindVertexArray(mesh->VAO);
+
+    glBindBuffer(GL_ARRAY_BUFFER, mesh->VBO);
+    glBufferData(GL_ARRAY_BUFFER, vertex_buffer_size, vertex_buffer, GL_STATIC_DRAW);
+
+    // Position attribute
+    size_t stride = sizeof(GLfloat) * floats_per_vertex;
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, stride, (void*)0);
+    glEnableVertexAttribArray(0);
+
+    // Free buffer from ram
+    SDL_free(vertex_buffer);
 }
 
 
@@ -482,7 +560,7 @@ GLuint create_generic_shader(char* vertex_shader_source, char* fragment_shader_s
         int log_length;
         glGetShaderiv(vertex_shader, GL_INFO_LOG_LENGTH, &log_length);
 
-        char* error_log = (char*)alloca(log_length * sizeof(char)); // `alloca()` does not require an explicit free()
+        char* error_log = (char*)alloca(log_length * sizeof(char)); // `alloca()` does not require an explicit SDL_free()
         glGetShaderInfoLog(vertex_shader, log_length, NULL, error_log);
 
         LOG_ERROR("Failed to compile the vertex shader!\n%s", error_log);
@@ -521,8 +599,8 @@ GLuint create_generic_shader(char* vertex_shader_source, char* fragment_shader_s
 
     glDeleteShader(vertex_shader);
     glDeleteShader(fragment_shader);
-    free(vertex_shader_source);
-    free(fragment_shader_source);
+    SDL_free(vertex_shader_source);
+    SDL_free(fragment_shader_source);
 
     return shader_program;
 }
@@ -530,19 +608,59 @@ GLuint create_generic_shader(char* vertex_shader_source, char* fragment_shader_s
 
 void view_mat_from_cam(Camera* cam, mat4 dest)
 {
+    SDL_assert(cam->up[0] + cam->up[1] + cam->up[2] != 0.0);
+
+    // Front direction from pitch (x) and yaw (y)
+    cam->front[0] = cosf(glm_rad(cam->rotation[1])) * cosf(glm_rad(cam->rotation[0]));
+    cam->front[1] = sinf(glm_rad(cam->rotation[0]));
+    cam->front[2] = sinf(glm_rad(cam->rotation[1])) * cosf(glm_rad(cam->rotation[0]));
+    glm_normalize(cam->front);
+
     // Right vector
     glm_cross(cam->front, cam->up, cam->right);
     glm_normalize(cam->right);
 
-    // Front direction from pitch and yaw
-    vec3 direction;
-    direction[0] = cosf(glm_rad(cam->rotation[1])) * cosf(glm_rad(cam->rotation[0]));
-    direction[1] = sinf(glm_rad(cam->rotation[0]));
-    direction[2] = sinf(glm_rad(cam->rotation[1])) * cosf(glm_rad(cam->rotation[0]));
-    glm_normalize(direction);
-    glm_vec3_copy(direction, cam->front);
-
+    // Target
     glm_vec3_add(cam->position, cam->front, cam->target);
 
+    // Build view matrix
     glm_lookat(cam->position, cam->target, cam->up, dest);
+}
+
+
+char* bytes_to_human_readable(size_t bytes)
+{
+    const char* units[] = {"B", "KB", "MB", "GB", "TB", "PB"};
+    
+    const int units_count = sizeof(units) / sizeof(char*);
+    double count = (double)bytes;
+    int i = 0;
+
+    while (count >= 1024.0 && i < units_count) {
+        count /= 1024.0;
+        i++;
+    }
+
+    return str_new_formatted("%.2f %s", count, units[i]);
+}
+
+
+char* str_new_formatted(const char* fmt, ...) {
+    va_list args;
+
+    va_start(args, fmt);
+    int str_len = SDL_vsnprintf(NULL, 0, fmt, args) + 1;
+    va_end(args);
+
+    char* str = (char*)SDL_calloc(1, str_len);
+    if (!str) {
+        LOG_ERROR("Failed to allocate enough memory for the new string.");
+        return NULL;
+    }
+
+    va_start(args, fmt);
+    SDL_vsnprintf(str, str_len, fmt, args);
+    va_end(args);
+
+    return str;
 }

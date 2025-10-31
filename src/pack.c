@@ -1,5 +1,3 @@
-#include <assert.h>
-
 #include <SDL3/SDL.h>
 
 /*
@@ -290,7 +288,7 @@ size_t get_file_size(char* path)
 
 void str_path_ensure_forward_slash(char* path)
 {
-    assert(path != NULL);
+    SDL_assert(path != NULL);
 
     char* ptr_cpy = path;
     while (*ptr_cpy != '\0') {
@@ -305,7 +303,7 @@ bool str_starts_with(char* str, char* prefix)
 {
     size_t len_prefix = strlen(prefix);
 
-    assert(strlen(str) > len_prefix);
+    SDL_assert(strlen(str) > len_prefix);
 
     return strncmp(str, prefix, len_prefix) == 0;
 }
