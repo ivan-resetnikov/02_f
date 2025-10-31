@@ -143,6 +143,12 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event)
         case SDL_EVENT_QUIT: {
             return SDL_APP_SUCCESS;
         } break;
+        case SDL_EVENT_MOUSE_MOTION: {
+            ctx.g.cam.rotation[1] += event->motion.xrel * 0.075;
+            ctx.g.cam.rotation[0] += -event->motion.yrel * 0.075;
+
+            ctx.g.cam.rotation[0] = glm_clamp(ctx.g.cam.rotation[0], -89.0f, 89.0f);
+        } break;
     }
 
     return SDL_APP_CONTINUE;
@@ -164,7 +170,7 @@ SDL_AppResult SDL_AppIterate(void *appstate)
     mat4 proj_mat;
     {
         // Movement
-        float speed = 1.0f;
+        float speed = 0.25f;
         vec3 move_speed_vec = {1.0f * speed * delta, 1.0f * speed * delta, 1.0f * speed * delta};
         if (ctx.keyboard_state[SDL_SCANCODE_W]) glm_vec3_muladd(ctx.g.cam.front, move_speed_vec, ctx.g.cam.position);
         if (ctx.keyboard_state[SDL_SCANCODE_S]) glm_vec3_mulsub(ctx.g.cam.front, move_speed_vec, ctx.g.cam.position);
