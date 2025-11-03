@@ -1,4 +1,4 @@
-#include <SDL3/SDL.h>
+#include "str_utils.h"
 
 /*
 ** Macros
@@ -40,21 +40,16 @@ void scan_dir(char* path);
 
 SDL_EnumerationResult list_dir(void *userdata, const char *dirname, const char *fname);
 
-char* bytes_to_human_readable(size_t bytes);
-
 size_t get_file_size(char* path);
-
-void str_path_ensure_forward_slash(char* path);
-char* str_new_formatted(const char* fmt, ...);
-bool str_starts_with(char* str, char* prefix);
-char* str_override(char* dest, char* str);
 
 /*
 ** Implementation
 */
 
-char** in_files = NULL;
+char** in_files_paths = NULL;
 int in_files_count = 0;
+char** exclusion_patterns = NULL;
+int exclusion_patterns_count = 0;
 
 int main(int args_count, char* args[])
 {
@@ -72,15 +67,24 @@ int main(int args_count, char* args[])
         if (str_starts_with(arg, "-o:")) {
             out_path = str_override(out_path, arg + strlen("-o:"));
         }
+
+        if (str_starts_with(arg, "-x:")) {
+            size_t new_size = sizeof(char*) * (exclusion_patterns_count + 1);
+            exclusion_patterns = SDL_realloc(exclusion_patterns, new_size);
+
+            exclusion_patterns[exclusion_patterns_count++] = SDL_strdup(arg + 3);
+        }
     }
 
     LOG_INFO("Input dir: %s", in_path);
     LOG_INFO("Ouput file: %s", out_path);
+    LOG_INFO("Excluded files: %d", exclusion_patterns_count);
 
     // Scan
     LOG_INFO("Scanning input directory");
     scan_dir(in_path);
 
+    // Create output file file
     LOG_INFO("Creating output file");
     SDL_IOStream* out_file = SDL_IOFromFile(out_path, "w");
     if (!out_file) {
@@ -88,11 +92,13 @@ int main(int args_count, char* args[])
         return 1;
     }
 
+    // Header
     LOG_DEBUG("Writing header");
     SDL_WriteIO(out_file, &in_files_count, sizeof(int));
 
     size_t header_size = SDL_TellIO(out_file);
 
+    // File index
     LOG_DEBUG("Creating file index");
     FileEntry* file_entires = NULL;
     int file_entires_count = 0;
@@ -106,7 +112,7 @@ int main(int args_count, char* args[])
     size_t index_section_size = 0;
     size_t file_offset = 0;
     for (int i = 0; i < in_files_count; i++) {
-        char* file_path = in_files[i];
+        char* file_path = in_files_paths[i];
         LOG_DEBUG("Creating entry #%d: %s", i, file_path);
 
         FileEntry* f = &file_entires[file_entires_count++];
@@ -221,9 +227,9 @@ void scan_dir(char* path)
 }
 
 
-SDL_EnumerationResult list_dir(void *userdata, const char *dirname, const char *fname) {
+SDL_EnumerationResult list_dir(void *userdata, const char *dir_name, const char *file_name) {
     char full_path[MAX_PATH_LENGTH];
-    SDL_snprintf(full_path, MAX_PATH_LENGTH, "%s%s", dirname, fname);
+    SDL_snprintf(full_path, MAX_PATH_LENGTH, "%s%s", dir_name, file_name);
 
     SDL_PathInfo info;
     if (SDL_GetPathInfo(full_path, &info)) {
@@ -231,16 +237,27 @@ SDL_EnumerationResult list_dir(void *userdata, const char *dirname, const char *
             scan_dir(full_path);
         }
         else if (info.type == SDL_PATHTYPE_FILE) {
-            char file_path[MAX_PATH_LENGTH];
-            SDL_snprintf(file_path, MAX_PATH_LENGTH, "%s/%s", dirname, fname);
+            // Check if excluded
+            bool excluded = false;
 
-            size_t new_size = sizeof(char*) * (in_files_count + 1);
-            in_files = SDL_realloc(in_files, new_size);
-            
-            in_files[in_files_count] = SDL_strdup(full_path);
-            str_path_ensure_forward_slash(in_files[in_files_count]);
+            for (int i = 0; i < exclusion_patterns_count; i++) {
+                char* pattern = exclusion_patterns[i];
 
-            in_files_count++;
+                if (str_wildcard_match(full_path, pattern)) {
+                    excluded = true;
+                    LOG_DEBUG("Excluding %s, matched exclusion pattern: %s", full_path, pattern);
+                    break;
+                }
+            }
+
+            if (!excluded) {
+                size_t new_size = sizeof(char*) * (in_files_count + 1);
+                in_files_paths = SDL_realloc(in_files_paths, new_size);
+                
+                in_files_paths[in_files_count] = SDL_strdup(full_path);
+
+                in_files_count++;
+            }
         }
         
     } else {
@@ -248,23 +265,6 @@ SDL_EnumerationResult list_dir(void *userdata, const char *dirname, const char *
     }
 
     return SDL_ENUM_CONTINUE;
-}
-
-
-char* bytes_to_human_readable(size_t bytes)
-{
-    const char* units[] = {"B", "KB", "MB", "GB", "TB", "PB"};
-    
-    const int units_count = sizeof(units) / sizeof(char*);
-    double count = (double)bytes;
-    int i = 0;
-
-    while (count >= 1024.0 && i < units_count) {
-        count /= 1024.0;
-        i++;
-    }
-
-    return str_new_formatted("%.2f %s", count, units[i]);
 }
 
 
@@ -283,55 +283,4 @@ size_t get_file_size(char* path)
     SDL_CloseIO(f);
 
     return file_size;
-}
-
-
-void str_path_ensure_forward_slash(char* path)
-{
-    SDL_assert(path != NULL);
-
-    char* ptr_cpy = path;
-    while (*ptr_cpy != '\0') {
-        if (*ptr_cpy == '\\') *ptr_cpy = '/';
-
-        ptr_cpy++;
-    }
-}
-
-
-bool str_starts_with(char* str, char* prefix)
-{
-    size_t len_prefix = strlen(prefix);
-
-    SDL_assert(strlen(str) > len_prefix);
-
-    return strncmp(str, prefix, len_prefix) == 0;
-}
-
-
-char* str_override(char* dest, char* str)
-{
-    SDL_free(dest);
-    char* new_dest = SDL_strdup(str);
-    return new_dest;
-}
-
-char* str_new_formatted(const char* fmt, ...) {
-    va_list args;
-
-    va_start(args, fmt);
-    int str_len = SDL_vsnprintf(NULL, 0, fmt, args) + 1;
-    va_end(args);
-
-    char* str = (char*)SDL_calloc(1, str_len);
-    if (!str) {
-        LOG_ERROR("Failed to allocate enough memory for the new string.");
-        return NULL;
-    }
-
-    va_start(args, fmt);
-    SDL_vsnprintf(str, str_len, fmt, args);
-    va_end(args);
-
-    return str;
 }

@@ -1,5 +1,3 @@
-#include "cglm/mat4.h"
-#include "cglm/vec3.h"
 #define SDL_MAIN_USE_CALLBACKS 1
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_main.h>
@@ -77,6 +75,7 @@ typedef struct {
 
     Mesh mesh;
     GLuint shader;
+    GLuint texture;
 } Game;
 
 struct Context {
@@ -184,6 +183,7 @@ SDL_AppResult SDL_AppIterate(void *appstate)
     /* Finall pass */
     {
         glEnable(GL_DEPTH_TEST);
+        glEnable(GL_CULL_FACE);
 
         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -198,9 +198,9 @@ SDL_AppResult SDL_AppIterate(void *appstate)
         glUniformMatrix4fv(glGetUniformLocation(ctx.g.shader, "u_proj_mat"), 1, GL_FALSE, &proj_mat[0][0]);
 
         // Material uniforms
-        // glActiveTexture(GL_TEXTURE0);
-        // glBindTexture(GL_TEXTURE_2D, material->diffuse_map);
-        // glUniform1i(glGetUniformLocation(ctx.g.shader, "u_texture"), 0);
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, ctx.g.texture);
+        glUniform1i(glGetUniformLocation(ctx.g.shader, "u_texture"), 0);
 
         // Draw segment
         glBindVertexArray(ctx.g.mesh.VAO);
@@ -346,6 +346,8 @@ bool init_game()
     ctx.g.shader = create_generic_shader(
         io_read_text_file("./assets/shaders/level.vs"),
         io_read_text_file("./assets/shaders/level.fs"));
+    
+    ctx.g.texture = io_load_texture("./assets/textures/brick_brown_wall.png", GL_REPEAT, GL_NEAREST, GL_NEAREST, 0, 0, NULL, NULL);
 
     io_load_mesh_mdl("./assets/models/levels/tot.mdl", &ctx.g.mesh);
 
@@ -509,8 +511,10 @@ void io_load_mesh_mdl(const char* path, Mesh* mesh)
         LOG_ERROR("Failed to read mesh size! SDL error:\n%s", SDL_GetError());
     }
 
-    int floats_per_vertex = (
-        3 // Position attribute
+    int floats_per_vertex = ( // Attributes
+        3 // Position
+        + 2 // UV
+        + 3 // Normal
     );
     size_t vertex_buffer_size = sizeof(GLfloat) * floats_per_vertex * tri_count * 3;
 
@@ -540,10 +544,16 @@ void io_load_mesh_mdl(const char* path, Mesh* mesh)
     glBindBuffer(GL_ARRAY_BUFFER, mesh->VBO);
     glBufferData(GL_ARRAY_BUFFER, vertex_buffer_size, vertex_buffer, GL_STATIC_DRAW);
 
-    // Position attribute
     size_t stride = sizeof(GLfloat) * floats_per_vertex;
+    // Position attribute
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, stride, (void*)0);
     glEnableVertexAttribArray(0);
+    // UV attribute
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, stride, (void*)(3 * sizeof(float)));
+    glEnableVertexAttribArray(1);
+    // Normal attribute
+    glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, stride, (void*)(5 * sizeof(float)));
+    glEnableVertexAttribArray(2);
 
     // Free buffer from ram
     SDL_free(vertex_buffer);
